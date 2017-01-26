@@ -1,0 +1,143 @@
+---
+title: "Practical Machine Learning Project"
+author: "William D. Downs"
+date: "1/25/2017"
+output: html_document
+---
+
+##Course Project: Predicting Proper Barbell Lifts##
+
+
+###Background###
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible 
+to collect a large amount of data about personal activity relatively inexpensively. 
+One thing that people regularly do is quantify how much of a particular activity 
+they do, but they rarely quantify how well they do it. In this project, the 
+goal is to use data from accelerometers on the belt, forearm, arm, and 
+dumbell of 6 participants. They were asked to perform barbell lifts correctly 
+and incorrectly in 5 different ways. More information is available from the 
+website here: http://groupware.les.inf.puc-rio.br/har (see the section on the 
+Weight Lifting Exercise Dataset).  The manner in which the exercise is done is recorded by the "classe" variable in the training set, therefore this is the variable to be predicted.
+
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (classe = A), throwing the elbows to the front (classe = B), lifting the dumbbell only halfway (classe = C), lowering the dumbbell only halfway (classe = D) and throwing the hips to the front (classe = E).
+
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+What follows is the construction of a prediction model based on a random forest protocol. The final model was then used to predict 20 unknown values for the *classe* variable.
+
+
+###Loading the Data###
+
+The data set to be used has been provided on a remote server (https://d396qusza40orc.cloudfront.net/predmachlearn/) that can be readily accessed.  This data was already partitioned into training (pml-training.csv) and testing (pml-testing.csv) sets. 
+```{r}
+library(XML)
+
+origTrain_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+origTrain <- read.csv(origTrain_URL)
+
+origTest_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+origTest <- read.csv(origTest_URL)
+
+dim(origTrain)
+dim(origTest)
+tail(names(origTrain))
+```
+
+
+###Cleaning the Data###
+
+Over one-third (67/160) of the columns of origTrain contain no data.
+```{r}
+trainNACount <- vector(length=160)
+for (n in 1:160) {trainNACount[n] <- length(origTrain[is.na(origTrain[,n]),n])}
+table(trainNACount)
+```
+
+And nearly two-thirds of the columns of origTest contain no data.
+```{r}
+testNACount <- vector(length=160)
+for (n in 1:160) {testNACount[n] <- length(origTest[is.na(origTest[,n]),n])}
+table(testNACount)
+```
+
+For this study we will work from prunedTrain and prunedTest where we have eliminated all variables/columns where we don't have complete columns of data in *both* origTrain and origTest.
+```{r}
+completeCols <- rep(FALSE, 160)
+for (n in 1:160) {if (trainNACount[n]==0 & testNACount[n]==0) {completeCols[n]=TRUE}}
+
+prunedTrain <- origTrain[, completeCols]
+prunedTest <- origTest[, completeCols]
+dim(prunedTrain)
+```
+
+The "X" column (prunedTrain[,1], prunedTest[,1]) serves as indexing for very strictly ordered test samples and therefore gives a strong but artificial correlation to the "classe" variable. 
+```{r}
+library(ggplot2)
+
+qplot(origTrain[,1], origTrain$classe, xlab="X", ylab="classe", main="The X variable creates an artificial correlation with the classe variable")
+```
+
+Therefore the "X" column was also pruned from the data sets. The second column  ("user_name") was also removed since it contains the names of the participants, which should not be a criterion for prediction.
+```{r}
+prunedTrain <- prunedTrain[,3:60]
+prunedTest <- prunedTest[,3:60]
+```
+
+One further variable/column was removed that showed little to no variance.
+```{r}
+library(caret)
+library(lattice)
+
+nsv <- nearZeroVar(prunedTrain, saveMetrics=TRUE)
+prunedTrain <- prunedTrain[, !nsv$nzv]
+prunedTest <- prunedTest[, !nsv$nzv]
+dim(prunedTrain)
+```
+
+
+###Cross-Validation of the Model###
+
+The prunedTrain data set was partitioned evenly into training and testing sets. The training set will be used to train a random forest (described below).  The testing set will be used to evaluate the final model (described below).
+```{r}
+set.seed(1729)
+
+inTrain <- createDataPartition(y=prunedTrain$classe, p=0.5, list=FALSE)
+training <- prunedTrain[inTrain, ]
+testing <- prunedTrain[-inTrain, ]
+```
+
+A "random forest cross-validation" (rfcv) will also be performed as the default cross-validation associated with train() executions when building a random forest model (i.e., train(...method="rf"), see below).
+
+
+###Training of the Model###
+
+Prediction of the variable "classe" will be based on a random forest model.  Random forest prediction proves accurate and robust for complete data sets (i.e., no NA entries).
+```{r}
+library(randomForest)
+
+modelRF <- train(classe ~ ., data=training, method="rf", prox=TRUE)
+```
+
+
+###Evaluation of the Model###
+
+The random forest model was evaluated by applying it to the unused "testing" data set and comparing the resulting predictions of "classe" values to known values for that variable (i.e., testing$classe).
+```{r}
+predTestRF <- predict(modelRF, testing)
+evalPredRF <- confusionMatrix(predTestRF, testing$classe)
+evalPredRF
+```
+The random forest model (modelRF) demonstrated a very high accuracy of `r as.numeric(evalPredRF$overall[1])` when correctly predicting which category of bicept curl is being performed based on the accelerometer measurements. This translates into an out of sample error of `r as.numeric(1-evalPredRF$overall[1])`.
+
+
+###Predicting 20 Unknown *classe* Values from the Model###
+
+The final test of the random forest model (modelRF) is to predict the unknown "classe" variable values for 20 cases of bicep curls contained in the original pml-testing.csv file. The prediction is actually carried out on a subset of that data file contained in the data.frame "prunedTest" [see "Cleaning the Data" above].
+
+```{r}
+predPrunedTestRF <- predict(modelRF, prunedTest)
+predPrunedTestRF
+```
+
+
